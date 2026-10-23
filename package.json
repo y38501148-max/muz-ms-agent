@@ -1,0 +1,41 @@
+{
+  "name": "muz-ms-agent",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --host 127.0.0.1 --port 3100",
+    "build": "nuxt build",
+    "preview": "nuxt preview --host 127.0.0.1 --port 3100",
+    "start": "NITRO_HOST=127.0.0.1 NITRO_PORT=3100 node .output/server/index.mjs",
+    "postinstall": "nuxt prepare",
+    "typecheck": "nuxt typecheck",
+    "test": "tsx --test tests/*.test.ts",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:pack": "npm run build && node scripts/desktop-prepare.mjs && electron-builder --config electron-builder.cjs --dir",
+    "desktop:build": "npm run build && node scripts/desktop-prepare.mjs && electron-builder --config electron-builder.cjs --publish never",
+    "test:live": "tsx scripts/live-interview.mts"
+  },
+  "dependencies": {
+    "@ant-design-vue/nuxt": "1.4.6",
+    "@ant-design/icons-vue": "^7.0.1",
+    "ant-design-vue": "4.2.6",
+    "mammoth": "^1.13.0",
+    "nuxt": "4.6.2",
+    "unpdf": "^1.9.1",
+    "vue": "^3.5.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0",
+    "vue-tsc": "^3.0.0"
+  },
+  "engines": {
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
+  },
+  "main": "desktop/main.cjs"
+}
