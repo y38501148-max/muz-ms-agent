@@ -9,6 +9,7 @@ import { createSessionSchema, settingsSchema, turnSchema, type TurnInput } from 
 import { publicSettings, requestJson, resolveSettings, testProvider, type ProviderFetch } from './provider'
 import { evaluatorPrompt, interviewerPrompt } from './prompts'
 import { appendDynamicFollowup, assessAnswer, generateQuestions } from './ai-interview'
+import { evidenceExcerpts } from './evidence'
 
 export const followupLimits = { easy: 1, medium: 2, hard: 4 } as const
 const dimensionSchema = z.object({
@@ -18,11 +19,12 @@ const dimensionSchema = z.object({
   validation: z.number().int().min(0).max(4).nullable(),
   communication: z.number().int().min(0).max(4).nullable(),
 }).strict()
+const evaluationEvidenceSchema = z.object({ quoteId: z.string(), pointId: z.string(), observation: z.string() }).strict()
 const evaluationSchema = z.object({
   questionId: z.string(),
   independent: dimensionSchema,
   assisted: dimensionSchema.nullable(),
-  evidence: z.array(z.object({ turnId: z.string(), quote: z.string(), pointId: z.string(), observation: z.string() }).strict()),
+  evidence: z.array(evaluationEvidenceSchema),
   strengths: z.array(z.string()),
   gaps: z.array(z.string()),
   confidence: z.enum(['high', 'medium', 'low']),
@@ -384,13 +386,18 @@ export class InterviewService {
         const parts = []
         for (const card of evaluationCards) {
           const turns = transcript.filter((turn) => turn.questionId === card.id)
-          const turnIds = new Map(turns.map((turn, index) => [`t${index + 1}`, turn.id]))
-          const compactTranscript = turns.map((turn, index) => ({ id: `t${index + 1}`, role: turn.role, kind: turn.kind, text: turn.text, questionId: turn.questionId, assisted: turn.assisted }))
-          const part = await requestJson(resolveSettings(db), 'interview_evaluation', reportSchema, evaluatorPrompt,
+          const compactTranscript = turns.map((turn, index) => ({
+            id: `t${index + 1}`, role: turn.role, kind: turn.kind, text: turn.text, questionId: turn.questionId, assisted: turn.assisted,
+            ...(turn.kind === 'answer' ? { excerpts: evidenceExcerpts(turn.text, `t${index + 1}e`) } : {}),
+          }))
+          const excerpts = new Map(compactTranscript.flatMap((turn, index) => (turn.excerpts || []).map((excerpt) => [excerpt.id, { text: excerpt.text, turnId: turns[index]!.id }] as const)))
+          const schema = reportSchema.extend({ evaluations: z.array(evaluationSchema.extend({
+            questionId: z.literal(card.id),
+            evidence: z.array(evaluationEvidenceSchema.extend({ quoteId: z.enum([...excerpts.keys()]), pointId: z.enum(card.points.map((point) => point.id)) })),
+          })).length(1) })
+          const output = await requestJson(resolveSettings(db), 'interview_evaluation', schema, evaluatorPrompt,
             { config: { roleId: session.config.roleId, difficulty: session.config.difficulty, mode: session.config.mode }, cards: [card], transcript: compactTranscript }, this.fetcher)
-          for (const evaluation of part.evaluations) {
-            for (const evidence of evaluation.evidence) evidence.turnId = turnIds.get(evidence.turnId) || ''
-          }
+          const part = { ...output, evaluations: output.evaluations.map((evaluation) => ({ ...evaluation, evidence: evaluation.evidence.map(({ quoteId, ...evidence }) => ({ ...evidence, quote: excerpts.get(quoteId)!.text, turnId: excerpts.get(quoteId)!.turnId })) })) }
           validateEvaluationEvidence({ ...session, turns: session.turns.filter((turn) => turn.questionId === card.id) }, part.evaluations, [answeredCards.find((entry) => entry.id === card.id)!])
           parts.push(part)
         }

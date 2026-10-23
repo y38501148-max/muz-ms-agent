@@ -5,6 +5,7 @@ import { AppError } from './errors'
 import { requestJson, type ProviderFetch } from './provider'
 import { authoringPrompt, dynamicInterviewerPrompt } from './prompts'
 import { experiencePatterns } from '../../content/interview-patterns'
+import { evidenceExcerpts } from './evidence'
 
 const rubricSchema = z.object({ pointId: z.string(), criterion: z.string().min(4).max(1500) }).strict()
 const authoredQuestionSchema = z.object({
@@ -18,9 +19,10 @@ const followupSchema = z.object({
   prompt: z.string().min(8).max(2000), targetPointIds: z.array(z.string()).min(1).max(8),
   rubric: z.array(rubricSchema).min(1).max(8), referenceAnswer: z.string().min(8).max(5000), sourceIds: z.array(z.string()).max(12),
 }).strict()
+const judgmentEvidenceSchema = z.object({ quoteId: z.string(), pointId: z.string(), observation: z.string().min(2).max(1500) }).strict()
 const judgmentSchema = z.object({
   verdict: z.enum(['correct', 'partial', 'incorrect', 'insufficient']), explanation: z.string().min(5).max(3000),
-  evidence: z.array(z.object({ quote: z.string().min(1).max(16000), pointId: z.string(), observation: z.string().min(2).max(1500) }).strict()).min(1).max(8),
+  evidence: z.array(judgmentEvidenceSchema).min(1).max(8),
 }).strict()
 const dynamicDecisionSchema = z.object({
   judgment: judgmentSchema, action: z.enum(['followup', 'advance']), followup: followupSchema.nullable(),
@@ -84,7 +86,11 @@ export async function generateQuestions(settings: ProviderSettings, config: Sess
 }
 
 export async function assessAnswer(settings: ProviderSettings, session: InterviewSession, card: Question, answer: Turn, remainingFollowups: number, fetcher?: ProviderFetch) {
-  const decision = await requestJson(settings, 'interview_answer', dynamicDecisionSchema, dynamicInterviewerPrompt,
+  const excerpts = evidenceExcerpts(answer.text)
+  const schema = dynamicDecisionSchema.extend({ judgment: judgmentSchema.extend({ evidence: z.array(judgmentEvidenceSchema.extend({
+    quoteId: z.enum(excerpts.map((excerpt) => excerpt.id)), pointId: z.enum(card.points.map((point) => point.id)),
+  })).min(1).max(8) }) })
+  const decision = await requestJson(settings, 'interview_answer', schema, dynamicInterviewerPrompt,
     {
       config: session.config,
       card: {
@@ -95,15 +101,14 @@ export async function assessAnswer(settings: ProviderSettings, session: Intervie
       },
       experienceGuidance: selectExperienceGuidance(session.config, [card]),
       transcript: session.turns.filter((turn) => turn.questionId === card.id && ['question', 'followup', 'answer', 'hint', 'teaching', 'clarification'].includes(turn.kind)),
-      currentAnswerTurnId: answer.id, currentAnswer: { text: answer.text, assisted: answer.assisted }, remainingFollowups,
+      currentAnswerTurnId: answer.id, currentAnswer: { text: answer.text, assisted: answer.assisted, excerpts }, remainingFollowups,
     }, fetcher)
-  if (decision.judgment.evidence.some((evidence) => !answer.text.includes(evidence.quote) || !evidence.quote.trim() || !card.points.some((point) => point.id === evidence.pointId))) throw new AppError(502, '回答判断未通过原话与实际考察要点校验，本次回答未保存，请重试。')
   if (decision.action === 'advance' && decision.followup !== null) throw new AppError(502, 'AI 换题指令与追问内容不一致，本次回答未保存。')
   if (decision.action === 'followup' && !decision.followup) throw new AppError(502, 'AI 未提供动态追问，本次回答未保存。')
   const judgment: AnswerJudgment = {
     answerTurnId: answer.id, questionId: card.id, verdict: decision.judgment.verdict,
     explanation: decision.judgment.explanation,
-    evidence: decision.judgment.evidence.map((evidence) => ({ ...evidence, turnId: answer.id })),
+    evidence: decision.judgment.evidence.map(({ quoteId, ...evidence }) => ({ ...evidence, quote: excerpts.find((excerpt) => excerpt.id === quoteId)!.text, turnId: answer.id })),
     assisted: answer.assisted, createdAt: new Date().toISOString(),
   }
   return { judgment, followup: decision.action === 'followup' && remainingFollowups > 0 ? decision.followup : null }

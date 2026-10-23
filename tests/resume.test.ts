@@ -92,7 +92,7 @@ test('resume text enters the first generation and later interview calls, while g
       assert.equal(input.config.resumeText, resume.text)
       assert.match(body.instructions, /不编造项目或指标/)
       const answer = input.transcript.find((turn: { id: string }) => turn.id === input.currentAnswerTurnId)
-      output = { judgment: { verdict: 'insufficient', explanation: '当前没有足够作答信息，需要后续练习。', evidence: [{ quote: answer.text, pointId: input.card.points[0].id, observation: '候选人明确表示不会。' }] }, action: 'advance', followup: null }
+      output = { judgment: { verdict: 'insufficient', explanation: '当前没有足够作答信息，需要后续练习。', evidence: [{ quoteId: input.currentAnswer.excerpts[0].id, pointId: input.card.points[0].id, observation: '候选人明确表示不会。' }] }, action: 'advance', followup: null }
     } else {
       assert.equal(input.config.resumeText, undefined)
       assert.equal(input.config.resumeFileName, undefined)

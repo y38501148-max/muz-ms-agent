@@ -55,9 +55,14 @@ try {
   assert.equal(report.evaluations.length, 1)
   assert.ok(report.evaluations[0]!.evidence.length)
   assert.ok(report.evaluations[0]!.assisted)
+  const independent = report.evaluations[0]!.independent.correctness
+  const assisted = report.evaluations[0]!.assisted!.correctness
+  assert.equal(typeof independent, 'number', '明确的机制错误应有正确性评分')
+  assert.equal(typeof assisted, 'number', '修正后的实质回答应有正确性评分')
   assert.ok(report.answerJudgments?.length === 2)
   assert.ok(report.improvements.length <= 3)
   console.log(`完整报告通过：${report.evaluations.length} 题、${report.evaluations[0]!.evidence.length} 条原话证据，评分耗时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`)
+  console.log(`正确性评分：独立 ${independent}/4，辅助后 ${assisted}/4。`)
   assert.deepEqual(await service.generateReport(session.id), report)
   console.log('重复读取复用已保存报告，无额外评分调用。')
 } finally {

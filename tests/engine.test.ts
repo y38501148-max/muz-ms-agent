@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { questions } from '../content/questions'
 import { InterviewService, followupLimits, validateEvaluationEvidence } from '../server/lib/engine'
 import { JsonStore } from '../server/lib/store'
+import { evidenceExcerpts } from '../server/lib/evidence'
 import { AppError } from '../server/lib/errors'
 import type { InterviewSession, Question, SessionConfig, ProviderSettings, Turn } from '../shared/types'
 import { requestJson, type ProviderFetch } from '../server/lib/provider'
@@ -243,7 +244,7 @@ test('all provider protocols support checked branch selection and independent re
       else if (formatName === 'interview_generation') output = authoredQuestions(input)
       else if (formatName === 'interview_answer') {
         const answer = input.transcript.find((turn: { id: string }) => turn.id === input.currentAnswerTurnId)
-        output = { judgment: { verdict: 'partial', explanation: '说明了方向，但验证条件仍需补充。', evidence: [{ quote: answer.text, pointId: input.card.points[0].id, observation: '引用当前回答说明判断。' }] }, action: 'advance', followup: null }
+        output = { judgment: { verdict: 'partial', explanation: '说明了方向，但验证条件仍需补充。', evidence: [{ quoteId: input.currentAnswer.excerpts[0].id, pointId: input.card.points[0].id, observation: '引用当前回答说明判断。' }] }, action: 'advance', followup: null }
       }
       else if (formatName === 'interview_evaluation') {
         const answer = input.transcript.find((turn: { kind: string }) => turn.kind === 'answer')
@@ -253,7 +254,7 @@ test('all provider protocols support checked branch selection and independent re
             questionId: input.cards[0].id,
             independent: { correctness: null, reasoning: 2, application: null, validation: null, communication: null },
             assisted: null,
-            evidence: [{ turnId: answer.id, quote: answer.text, pointId: input.cards[0].points[0].id, observation: '依据此原话给出判断。' }],
+            evidence: [{ quoteId: answer.excerpts[0].id, pointId: input.cards[0].points[0].id, observation: '依据此原话给出判断。' }],
             strengths: ['说明了一个判断方向'], gaps: [], confidence: 'low',
           }],
           improvements: [],
@@ -543,7 +544,7 @@ test('AI writes original questions and answer-specific followups with coaching f
       const answer = input.transcript.find((turn: { id: string }) => turn.id === input.currentAnswerTurnId)
       const first = input.remainingFollowups > 0
       return jsonProviderResponse('responses', {
-        judgment: { verdict: first ? 'incorrect' : 'correct', explanation: first ? '进程通常有隔离的地址空间，而同一进程的线程共享资源；原回答把二者混为一谈。' : '修正后说明了隔离、共享与故障范围，符合追问要求。', evidence: [{ quote: answer.text, pointId: first ? input.card.points[0].id : input.card.points.at(-1).id, observation: '依据当前原话与实际问题给出判断。' }] },
+        judgment: { verdict: first ? 'incorrect' : 'correct', explanation: first ? '进程通常有隔离的地址空间，而同一进程的线程共享资源；原回答把二者混为一谈。' : '修正后说明了隔离、共享与故障范围，符合追问要求。', evidence: [{ quoteId: input.currentAnswer.excerpts[0].id, pointId: first ? input.card.points[0].id : input.card.points.at(-1).id, observation: '依据当前原话与实际问题给出判断。' }] },
         action: first ? 'followup' : 'advance',
         followup: first ? { prompt: followupPrompt, targetPointIds: ['p3'], rubric: [{ pointId: 'p3', criterion: '根据进程与线程的隔离边界解释故障传播。' }, { pointId: 'p3', criterion: '说明验证故障范围的方法。' }], referenceAnswer: '独立进程的故障通常局限于该进程；线程所在线程组的进程故障可能影响共享进程内的其他任务。需结合运行时和具体故障验证。', sourceIds: input.card.generation.sourceIds } : null,
       })
@@ -558,7 +559,7 @@ test('AI writes original questions and answer-specific followups with coaching f
       assert.equal(input.cards[0].sources, undefined)
       const answers = input.transcript.filter((turn: { kind: string }) => turn.kind === 'answer')
       const scores = (correctness: number) => ({ correctness, reasoning: null, application: null, validation: null, communication: null })
-      return jsonProviderResponse('responses', { summary: '首答有误，辅导后能够修正。', evaluations: [{ questionId: input.cards[0].id, independent: scores(0), assisted: scores(3), evidence: answers.map((answer: { id: string; text: string }, index: number) => ({ turnId: answer.id, quote: answer.text, pointId: index === 0 ? 'p1' : 'p3', observation: '分别记录独立首答和反馈后的作答。' })), strengths: ['反馈后能修正解释'], gaps: ['独立首答混淆隔离边界'], confidence: 'medium' }], improvements: [] })
+      return jsonProviderResponse('responses', { summary: '首答有误，辅导后能够修正。', evaluations: [{ questionId: input.cards[0].id, independent: scores(0), assisted: scores(3), evidence: answers.map((answer: { id: string; text: string; excerpts: { id: string }[] }, index: number) => ({ quoteId: answer.excerpts[0]!.id, pointId: index === 0 ? 'p1' : 'p3', observation: '分别记录独立首答和反馈后的作答。' })), strengths: ['反馈后能修正解释'], gaps: ['独立首答混淆隔离边界'], confidence: 'medium' }], improvements: [] })
     }
     throw new Error('Unexpected request')
   }
@@ -608,10 +609,10 @@ test('simulation hides judgments while active or paused and exposes recorded jud
     if (body.text.format.name === 'interview_generation') return jsonProviderResponse('responses', authoredQuestions(input))
     if (body.text.format.name === 'interview_answer') {
       const answer = input.transcript.find((turn: { id: string }) => turn.id === input.currentAnswerTurnId)
-      return jsonProviderResponse('responses', { judgment: { verdict: 'insufficient', explanation: marker, evidence: [{ quote: answer.text, pointId: input.card.points[0].id, observation: '候选人明确表示不会。' }] }, action: 'advance', followup: null })
+      return jsonProviderResponse('responses', { judgment: { verdict: 'insufficient', explanation: marker, evidence: [{ quoteId: input.currentAnswer.excerpts[0].id, pointId: input.card.points[0].id, observation: '候选人明确表示不会。' }] }, action: 'advance', followup: null })
     }
     const answer = input.transcript.find((turn: { kind: string }) => turn.kind === 'answer')
-    return jsonProviderResponse('responses', { summary: '实际回答明确不会。', evaluations: [{ questionId: input.cards[0].id, independent: { correctness: 0, reasoning: null, application: null, validation: null, communication: null }, assisted: null, evidence: [{ turnId: answer.id, quote: answer.text, pointId: input.cards[0].points[0].id, observation: '根据明确不会的原话记录。' }], strengths: [], gaps: ['需要补充此知识点'], confidence: 'low' }], improvements: [] })
+    return jsonProviderResponse('responses', { summary: '实际回答明确不会。', evaluations: [{ questionId: input.cards[0].id, independent: { correctness: 0, reasoning: null, application: null, validation: null, communication: null }, assisted: null, evidence: [{ quoteId: answer.excerpts[0].id, pointId: input.cards[0].points[0].id, observation: '根据明确不会的原话记录。' }], strengths: [], gaps: ['需要补充此知识点'], confidence: 'low' }], improvements: [] })
   }
   const { service, clean } = await setup(fetcher)
   try {
@@ -661,7 +662,7 @@ test('fabricated judgment quotes or unanchored followup scopes do not commit ans
       if (body.text.format.name === 'interview_generation') return jsonProviderResponse('responses', authoredQuestions(input))
       answerCalls += 1
       const answer = input.transcript.find((turn: { id: string }) => turn.id === input.currentAnswerTurnId)
-      return jsonProviderResponse('responses', { judgment: { verdict: 'partial', explanation: '需要通过实际证据继续判断。', evidence: [{ quote: failure === 'quote' ? '这是候选人从未说过的原话' : answer.text, pointId: input.card.points[0].id, observation: '当前原话的判断依据。' }] }, action: failure === 'quote' ? 'advance' : 'followup', followup: failure === 'quote' ? null : { prompt: '请再说明一个与当前知识卡完全无关的结论。', targetPointIds: ['invented-point'], rubric: [{ pointId: 'invented-point', criterion: '不能使用不存在的知识点。' }], referenceAnswer: '这是不应被应用的无依据参考答案。', sourceIds: input.card.generation.sourceIds } })
+      return jsonProviderResponse('responses', { judgment: { verdict: 'partial', explanation: '需要通过实际证据继续判断。', evidence: [{ quoteId: failure === 'quote' ? 'invented-excerpt' : input.currentAnswer.excerpts[0].id, pointId: input.card.points[0].id, observation: '当前原话的判断依据。' }] }, action: failure === 'quote' ? 'advance' : 'followup', followup: failure === 'quote' ? null : { prompt: '请再说明一个与当前知识卡完全无关的结论。', targetPointIds: ['invented-point'], rubric: [{ pointId: 'invented-point', criterion: '不能使用不存在的知识点。' }], referenceAnswer: '这是不应被应用的无依据参考答案。', sourceIds: input.card.generation.sourceIds } })
     }
     const { service, clean } = await setup(fetcher)
     try {
@@ -670,7 +671,7 @@ test('fabricated judgment quotes or unanchored followup scopes do not commit ans
       await assert.rejects(act(service, session, 'answer', { text: '这里是实际回答，不允许系统另造原话。' }), status(502))
       assert.deepEqual(await service.getSession(session.id), session)
       assert.deepEqual(await service.storage.read((db) => db.answerJudgments?.[session.id] || []), [])
-      assert.equal(answerCalls, 1, 'semantic evidence failures must not trigger automatic format repair')
+      assert.equal(answerCalls, failure === 'quote' ? 2 : 1, 'unknown excerpt IDs get one bounded format repair; unanchored followups are rejected immediately')
     } finally { await clean() }
   }
 })
@@ -725,14 +726,14 @@ test('reports grade one question per request, restore short turn IDs and never m
     if (body.text.format.name === 'interview_generation') return jsonProviderResponse('responses', authoredQuestions(input))
     if (body.text.format.name === 'interview_answer') {
       const answer = input.transcript.find((turn: Turn) => turn.id === input.currentAnswerTurnId)
-      return jsonProviderResponse('responses', { judgment: { verdict: 'partial', explanation: '回答提出一个思路，仍需验证。', evidence: [{ quote: answer.text, pointId: input.card.points[0].id, observation: '按原话判断。' }] }, action: 'advance', followup: null })
+      return jsonProviderResponse('responses', { judgment: { verdict: 'partial', explanation: '回答提出一个思路，仍需验证。', evidence: [{ quoteId: input.currentAnswer.excerpts[0].id, pointId: input.card.points[0].id, observation: '按原话判断。' }] }, action: 'advance', followup: null })
     }
     assert.equal(input.cards.length, 1)
     const card = input.cards[0]
     graded.push(card.id)
     assert.ok(input.transcript.every((turn: Turn) => turn.questionId === card.id && /^t\d+$/.test(turn.id)))
     const answer = input.transcript.find((turn: Turn) => turn.kind === 'answer')
-    return jsonProviderResponse('responses', { summary: `${card.id} 已复核。`, evaluations: [{ questionId: card.id, independent: { correctness: 2, reasoning: null, application: null, validation: null, communication: null }, assisted: null, evidence: [{ turnId: answer.id, pointId: card.points[0].id, quote: answer.text, observation: '仅依据本题回答。' }], strengths: [], gaps: ['补充验证'], confidence: 'medium' }], improvements: [] })
+    return jsonProviderResponse('responses', { summary: `${card.id} 已复核。`, evaluations: [{ questionId: card.id, independent: { correctness: 2, reasoning: null, application: null, validation: null, communication: null }, assisted: null, evidence: [{ quoteId: answer.excerpts[0].id, pointId: card.points[0].id, observation: '仅依据本题回答。' }], strengths: [], gaps: ['补充验证'], confidence: 'medium' }], improvements: [] })
   }
   const { service, clean } = await setup(fetcher)
   try {
@@ -751,4 +752,17 @@ test('reports grade one question per request, restore short turn IDs and never m
     await service.generateReport(session.id)
     assert.equal(graded.length, 2)
   } finally { await clean() }
+})
+
+test('evidence excerpts keep source text intact across Chinese punctuation, code and Unicode', () => {
+  const text = `线程共享地址空间。Correction: "stack" is private.\n原始代码：if (x) { y++; } 🙂\n${'无标点长句🙂'.repeat(90)}`
+  const excerpts = evidenceExcerpts(text)
+  assert.ok(excerpts.length > 3)
+  assert.equal(new Set(excerpts.map((excerpt) => excerpt.id)).size, excerpts.length)
+  for (const excerpt of excerpts) {
+    assert.ok(text.includes(excerpt.text))
+    assert.ok(Array.from(excerpt.text).length <= 240)
+    assert.equal(excerpt.text.includes('\uFFFD'), false)
+  }
+  assert.equal(excerpts.map((excerpt) => excerpt.text).join('').replace(/\s/g, ''), text.replace(/\s/g, ''))
 })
